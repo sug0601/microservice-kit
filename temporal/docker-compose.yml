@@ -1,0 +1,67 @@
+services:
+  # PostgreSQL for Temporal
+  temporal-db:
+    image: postgres:15-alpine
+    container_name: temporal-db
+    environment:
+      POSTGRES_USER: temporal
+      POSTGRES_PASSWORD: temporalpass
+      POSTGRES_DB: temporal
+    volumes:
+      - temporal-db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "temporal"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Temporal Server (all-in-one for development)
+  temporal:
+    image: temporalio/auto-setup:1.24
+    container_name: temporal
+    environment:
+      - DB=postgres12
+      - DB_PORT=5432
+      - POSTGRES_USER=temporal
+      - POSTGRES_PWD=temporalpass
+      - POSTGRES_SEEDS=temporal-db
+    ports:
+      - "7233:7233"
+    depends_on:
+      temporal-db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "tctl", "--address", "temporal:7233", "cluster", "health"]
+      interval: 10s
+      timeout: 10s
+      retries: 30
+      start_period: 60s
+
+  # Temporal Web UI
+  temporal-ui:
+    image: temporalio/ui:2.26.2
+    container_name: temporal-ui
+    environment:
+      - TEMPORAL_ADDRESS=temporal:7233
+      - TEMPORAL_CORS_ORIGINS=http://localhost:8088
+    ports:
+      - "8088:8080"
+    depends_on:
+      temporal:
+        condition: service_healthy
+
+  # Saga Worker
+  saga-worker:
+    build:
+      context: .
+      dockerfile: saga-worker/Dockerfile
+    container_name: saga-worker
+    environment:
+      - TEMPORAL_ADDRESS=temporal:7233
+    depends_on:
+      temporal:
+        condition: service_healthy
+    restart: on-failure
+
+volumes:
+  temporal-db-data:
