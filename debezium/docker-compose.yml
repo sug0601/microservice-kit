@@ -1,0 +1,86 @@
+services:
+  postgres:
+    image: postgres:15
+    container_name: postgres
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: testdb
+    command:
+      - "postgres"
+      - "-c"
+      - "wal_level=logical"
+      - "-c"
+      - "max_replication_slots=4"
+      - "-c"
+      - "max_wal_senders=4"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  debezium-server:
+    build: .
+    container_name: debezium-server
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./config:/debezium/conf
+      - ./data:/debezium/data
+    environment:
+      DEBEZIUM_SINK_TYPE: redis
+      DEBEZIUM_SINK_REDIS_ADDRESS: redis:6379
+      DEBEZIUM_SOURCE_CONNECTOR_CLASS: io.debezium.connector.postgresql.PostgresConnector
+      DEBEZIUM_SOURCE_OFFSET_STORAGE_FILE_FILENAME: /debezium/data/offsets.dat
+      DEBEZIUM_SOURCE_OFFSET_FLUSH_INTERVAL_MS: 0
+      DEBEZIUM_SOURCE_DATABASE_HOSTNAME: postgres
+      DEBEZIUM_SOURCE_DATABASE_PORT: 5432
+      DEBEZIUM_SOURCE_DATABASE_USER: postgres
+      DEBEZIUM_SOURCE_DATABASE_PASSWORD: postgres
+      DEBEZIUM_SOURCE_DATABASE_DBNAME: testdb
+      DEBEZIUM_SOURCE_TOPIC_PREFIX: testdb
+      DEBEZIUM_SOURCE_PLUGIN_NAME: pgoutput
+      DEBEZIUM_SOURCE_SCHEMA_INCLUDE_LIST: public
+      # SMT Filter: INSERTのみ通す (op: c=create, u=update, d=delete, r=read)
+      DEBEZIUM_TRANSFORMS: filter
+      DEBEZIUM_TRANSFORMS_FILTER_TYPE: io.debezium.transforms.Filter
+      DEBEZIUM_TRANSFORMS_FILTER_LANGUAGE: jsr223.groovy
+      DEBEZIUM_TRANSFORMS_FILTER_CONDITION: "value.op == 'c'"
+      DEBEZIUM_TRANSFORMS_FILTER_NULL__HANDLING__MODE: drop
+
+  redis-commander:
+    image: rediscommander/redis-commander:latest
+    container_name: redis-commander
+    depends_on:
+      - redis
+    ports:
+      - "8081:8081"
+    environment:
+      REDIS_HOSTS: local:redis:6379
+
+volumes:
+  postgres_data:
+  redis_data:
